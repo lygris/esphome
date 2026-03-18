@@ -16,6 +16,11 @@ class CC1101Listener {
   virtual void on_packet(const std::vector<uint8_t> &packet, float freq_offset, float rssi, uint8_t lqi) = 0;
 };
 
+class CC1101ConfigListener {
+ public:
+  virtual void on_config_change() = 0;
+};
+
 class CC1101Component : public Component,
                         public spi::SPIDevice<spi::BIT_ORDER_MSB_FIRST, spi::CLOCK_POLARITY_LOW,
                                               spi::CLOCK_PHASE_LEADING, spi::DATA_RATE_1MHZ> {
@@ -76,10 +81,50 @@ class CC1101Component : public Component,
   void set_crc_enable(bool value);
   void set_whitening(bool value);
 
+  // Configuration Getters
+  uint16_t get_chip_id() { return this->chip_id_; }
+  float get_output_power() { return this->output_power_effective_; }
+  RxAttenuation get_rx_attenuation() { return static_cast<RxAttenuation>(this->state_.CLOSE_IN_RX); }
+  bool get_dc_blocking_filter() { return this->state_.DEM_DCFILT_OFF == 0; }
+  float get_frequency();
+  float get_if_frequency();
+  float get_filter_bandwidth();
+  uint8_t get_channel() { return this->state_.CHANNR; }
+  float get_channel_spacing();
+  float get_fsk_deviation();
+  uint8_t get_msk_deviation() { return this->state_.DEVIATION_M + 1; }
+  float get_symbol_rate();
+  SyncMode get_sync_mode() { return static_cast<SyncMode>(this->state_.SYNC_MODE); }
+  bool get_carrier_sense_above_threshold() { return this->state_.CARRIER_SENSE_ABOVE_THRESHOLD; }
+  Modulation get_modulation_type() { return static_cast<Modulation>(this->state_.MOD_FORMAT); }
+  bool get_manchester() { return this->state_.MANCHESTER_EN; }
+  uint8_t get_num_preamble() { return this->state_.NUM_PREAMBLE; }
+  uint8_t get_sync1() { return this->state_.SYNC1; }
+  uint8_t get_sync0() { return this->state_.SYNC0; }
+  MagnTarget get_magn_target() { return static_cast<MagnTarget>(this->state_.MAGN_TARGET); }
+  MaxLnaGain get_max_lna_gain() { return static_cast<MaxLnaGain>(this->state_.MAX_LNA_GAIN); }
+  MaxDvgaGain get_max_dvga_gain() { return static_cast<MaxDvgaGain>(this->state_.MAX_DVGA_GAIN); }
+  int8_t get_carrier_sense_abs_thr();
+  CarrierSenseRelThr get_carrier_sense_rel_thr() {
+    return static_cast<CarrierSenseRelThr>(this->state_.CARRIER_SENSE_REL_THR);
+  }
+  bool get_lna_priority() { return this->state_.AGC_LNA_PRIORITY; }
+  FilterLengthFskMsk get_filter_length_fsk_msk() { return static_cast<FilterLengthFskMsk>(this->state_.FILTER_LENGTH); }
+  FilterLengthAskOok get_filter_length_ask_ook() { return static_cast<FilterLengthAskOok>(this->state_.FILTER_LENGTH); }
+  Freeze get_freeze() { return static_cast<Freeze>(this->state_.AGC_FREEZE); }
+  WaitTime get_wait_time() { return static_cast<WaitTime>(this->state_.WAIT_TIME); }
+  HystLevel get_hyst_level() { return static_cast<HystLevel>(this->state_.HYST_LEVEL); }
+  bool get_packet_mode() { return this->state_.PKT_FORMAT == static_cast<uint8_t>(PacketFormat::PACKET_FORMAT_FIFO); }
+  uint8_t get_packet_length() { return this->state_.PKTLEN; }
+  bool get_crc_enable() { return this->state_.CRC_EN; }
+  bool get_whitening() { return this->state_.WHITE_DATA; }
+
   // Packet mode operations
   CC1101Error transmit_packet(const std::vector<uint8_t> &packet);
   void register_listener(CC1101Listener *listener) { this->listeners_.push_back(listener); }
   Trigger<std::vector<uint8_t>, float, float, uint8_t> *get_packet_trigger() { return &this->packet_trigger_; }
+
+  void register_config_listener(CC1101ConfigListener *listener) { this->config_listeners_.push_back(listener); }
 
  protected:
   uint16_t chip_id_{0};
@@ -96,9 +141,11 @@ class CC1101Component : public Component,
 
   // Packet handling
   void call_listeners_(const std::vector<uint8_t> &packet, float freq_offset, float rssi, uint8_t lqi);
+  void notify_config_listeners_();
   Trigger<std::vector<uint8_t>, float, float, uint8_t> packet_trigger_;
   std::vector<uint8_t> packet_;
   std::vector<CC1101Listener *> listeners_;
+  std::vector<CC1101ConfigListener *> config_listeners_;
 
   // Low-level Helpers
   uint8_t strobe_(Command cmd);

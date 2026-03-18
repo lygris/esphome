@@ -214,6 +214,12 @@ void CC1101Component::loop() {
   this->enter_rx_();
 }
 
+void CC1101Component::notify_config_listeners_() {
+  for (auto &listener : this->config_listeners_) {
+    listener->on_config_change();
+  }
+}
+
 void CC1101Component::dump_config() {
   static const char *const MODULATION_NAMES[] = {"2-FSK", "GFSK",   "UNUSED", "ASK/OOK",
                                                  "4-FSK", "UNUSED", "UNUSED", "MSK"};
@@ -393,6 +399,8 @@ CC1101Error CC1101Component::transmit_packet(const std::vector<uint8_t> &packet)
 
 // Setters
 void CC1101Component::set_output_power(float value) {
+  if (this->output_power_requested_ == value)
+    return;
   this->output_power_requested_ = value;
   int32_t freq = static_cast<int32_t>(this->state_.FREQ2 << 16 | this->state_.FREQ1 << 8 | this->state_.FREQ0) *
                  XTAL_FREQUENCY / (1 << 16);
@@ -418,27 +426,40 @@ void CC1101Component::set_output_power(float value) {
   if (this->initialized_) {
     this->write_(Register::PATABLE, this->pa_table_, sizeof(this->pa_table_));
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_rx_attenuation(RxAttenuation value) {
+  if (this->state_.CLOSE_IN_RX == static_cast<uint8_t>(value))
+    return;
   this->state_.CLOSE_IN_RX = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::FIFOTHR);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_dc_blocking_filter(bool value) {
-  this->state_.DEM_DCFILT_OFF = value ? 0 : 1;
+  uint8_t val = value ? 0 : 1;
+  if (this->state_.DEM_DCFILT_OFF == val)
+    return;
+  this->state_.DEM_DCFILT_OFF = val;
   if (this->initialized_) {
     this->write_(Register::MDMCFG2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_frequency(float value) {
   int32_t freq = static_cast<int32_t>(value * (1 << 16) / XTAL_FREQUENCY);
-  this->state_.FREQ2 = static_cast<uint8_t>(freq >> 16);
-  this->state_.FREQ1 = static_cast<uint8_t>(freq >> 8);
-  this->state_.FREQ0 = static_cast<uint8_t>(freq);
+  uint8_t f2 = static_cast<uint8_t>(freq >> 16);
+  uint8_t f1 = static_cast<uint8_t>(freq >> 8);
+  uint8_t f0 = static_cast<uint8_t>(freq);
+  if (this->state_.FREQ2 == f2 && this->state_.FREQ1 == f1 && this->state_.FREQ0 == f0)
+    return;
+  this->state_.FREQ2 = f2;
+  this->state_.FREQ1 = f1;
+  this->state_.FREQ0 = f0;
   if (this->initialized_) {
     this->enter_idle_();
     this->write_(Register::FREQ2);
@@ -446,93 +467,125 @@ void CC1101Component::set_frequency(float value) {
     this->write_(Register::FREQ0);
     this->enter_rx_();
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_if_frequency(float value) {
-  this->state_.FREQ_IF = value * (1 << 10) / XTAL_FREQUENCY;
+  uint8_t val = value * (1 << 10) / XTAL_FREQUENCY;
+  if (this->state_.FREQ_IF == val)
+    return;
+  this->state_.FREQ_IF = val;
   if (this->initialized_) {
     this->write_(Register::FSCTRL1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_filter_bandwidth(float value) {
   uint8_t e;
   uint32_t m;
   split_float(XTAL_FREQUENCY / (value * 8), 2, e, m);
+  if (this->state_.CHANBW_E == e && this->state_.CHANBW_M == static_cast<uint8_t>(m))
+    return;
   this->state_.CHANBW_E = e;
   this->state_.CHANBW_M = static_cast<uint8_t>(m);
   if (this->initialized_) {
     this->write_(Register::MDMCFG4);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_channel(uint8_t value) {
+  if (this->state_.CHANNR == value)
+    return;
   this->state_.CHANNR = value;
   if (this->initialized_) {
     this->enter_idle_();
     this->write_(Register::CHANNR);
     this->enter_rx_();
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_channel_spacing(float value) {
   uint8_t e;
   uint32_t m;
   split_float(value * (1 << 18) / XTAL_FREQUENCY, 8, e, m);
+  if (this->state_.CHANSPC_E == e && this->state_.CHANSPC_M == static_cast<uint8_t>(m))
+    return;
   this->state_.CHANSPC_E = e;
   this->state_.CHANSPC_M = static_cast<uint8_t>(m);
   if (this->initialized_) {
     this->write_(Register::MDMCFG1);
     this->write_(Register::MDMCFG0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_fsk_deviation(float value) {
   uint8_t e;
   uint32_t m;
   split_float(value * (1 << 17) / XTAL_FREQUENCY, 3, e, m);
+  if (this->state_.DEVIATION_E == e && this->state_.DEVIATION_M == static_cast<uint8_t>(m))
+    return;
   this->state_.DEVIATION_E = e;
   this->state_.DEVIATION_M = static_cast<uint8_t>(m);
   if (this->initialized_) {
     this->write_(Register::DEVIATN);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_msk_deviation(uint8_t value) {
+  if (this->state_.DEVIATION_E == 0 && this->state_.DEVIATION_M == value - 1)
+    return;
   this->state_.DEVIATION_E = 0;
   this->state_.DEVIATION_M = value - 1;
   if (this->initialized_) {
     this->write_(Register::DEVIATN);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_symbol_rate(float value) {
   uint8_t e;
   uint32_t m;
   split_float(value * (1 << 28) / XTAL_FREQUENCY, 8, e, m);
+  if (this->state_.DRATE_E == e && this->state_.DRATE_M == static_cast<uint8_t>(m))
+    return;
   this->state_.DRATE_E = e;
   this->state_.DRATE_M = static_cast<uint8_t>(m);
   if (this->initialized_) {
     this->write_(Register::MDMCFG4);
     this->write_(Register::MDMCFG3);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_sync_mode(SyncMode value) {
+  if (this->state_.SYNC_MODE == static_cast<uint8_t>(value))
+    return;
   this->state_.SYNC_MODE = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::MDMCFG2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_carrier_sense_above_threshold(bool value) {
-  this->state_.CARRIER_SENSE_ABOVE_THRESHOLD = value ? 1 : 0;
+  uint8_t val = value ? 1 : 0;
+  if (this->state_.CARRIER_SENSE_ABOVE_THRESHOLD == val)
+    return;
+  this->state_.CARRIER_SENSE_ABOVE_THRESHOLD = val;
   if (this->initialized_) {
     this->write_(Register::MDMCFG2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_modulation_type(Modulation value) {
+  if (this->state_.MOD_FORMAT == static_cast<uint8_t>(value))
+    return;
   this->state_.MOD_FORMAT = static_cast<uint8_t>(value);
   this->state_.PA_POWER = value == Modulation::MODULATION_ASK_OOK ? 1 : 0;
   if (this->initialized_) {
@@ -542,116 +595,168 @@ void CC1101Component::set_modulation_type(Modulation value) {
     this->write_(Register::FREND0);
     this->enter_rx_();
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_manchester(bool value) {
-  this->state_.MANCHESTER_EN = value ? 1 : 0;
+  uint8_t val = value ? 1 : 0;
+  if (this->state_.MANCHESTER_EN == val)
+    return;
+  this->state_.MANCHESTER_EN = val;
   if (this->initialized_) {
     this->write_(Register::MDMCFG2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_num_preamble(uint8_t value) {
+  if (this->state_.NUM_PREAMBLE == value)
+    return;
   this->state_.NUM_PREAMBLE = value;
   if (this->initialized_) {
     this->write_(Register::MDMCFG1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_sync1(uint8_t value) {
+  if (this->state_.SYNC1 == value)
+    return;
   this->state_.SYNC1 = value;
   if (this->initialized_) {
     this->write_(Register::SYNC1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_sync0(uint8_t value) {
+  if (this->state_.SYNC0 == value)
+    return;
   this->state_.SYNC0 = value;
   if (this->initialized_) {
     this->write_(Register::SYNC0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_magn_target(MagnTarget value) {
+  if (this->state_.MAGN_TARGET == static_cast<uint8_t>(value))
+    return;
   this->state_.MAGN_TARGET = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_max_lna_gain(MaxLnaGain value) {
+  if (this->state_.MAX_LNA_GAIN == static_cast<uint8_t>(value))
+    return;
   this->state_.MAX_LNA_GAIN = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_max_dvga_gain(MaxDvgaGain value) {
+  if (this->state_.MAX_DVGA_GAIN == static_cast<uint8_t>(value))
+    return;
   this->state_.MAX_DVGA_GAIN = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL2);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_carrier_sense_abs_thr(int8_t value) {
-  this->state_.CARRIER_SENSE_ABS_THR = static_cast<uint8_t>(value & 0b1111);
+  uint8_t val = static_cast<uint8_t>(value & 0b1111);
+  if (this->state_.CARRIER_SENSE_ABS_THR == val)
+    return;
+  this->state_.CARRIER_SENSE_ABS_THR = val;
   if (this->initialized_) {
     this->write_(Register::AGCCTRL1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_carrier_sense_rel_thr(CarrierSenseRelThr value) {
+  if (this->state_.CARRIER_SENSE_REL_THR == static_cast<uint8_t>(value))
+    return;
   this->state_.CARRIER_SENSE_REL_THR = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_lna_priority(bool value) {
-  this->state_.AGC_LNA_PRIORITY = value ? 1 : 0;
+  uint8_t val = value ? 1 : 0;
+  if (this->state_.AGC_LNA_PRIORITY == val)
+    return;
+  this->state_.AGC_LNA_PRIORITY = val;
   if (this->initialized_) {
     this->write_(Register::AGCCTRL1);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_filter_length_fsk_msk(FilterLengthFskMsk value) {
+  if (this->state_.FILTER_LENGTH == static_cast<uint8_t>(value))
+    return;
   this->state_.FILTER_LENGTH = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_filter_length_ask_ook(FilterLengthAskOok value) {
+  if (this->state_.FILTER_LENGTH == static_cast<uint8_t>(value))
+    return;
   this->state_.FILTER_LENGTH = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_freeze(Freeze value) {
+  if (this->state_.AGC_FREEZE == static_cast<uint8_t>(value))
+    return;
   this->state_.AGC_FREEZE = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_wait_time(WaitTime value) {
+  if (this->state_.WAIT_TIME == static_cast<uint8_t>(value))
+    return;
   this->state_.WAIT_TIME = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_hyst_level(HystLevel value) {
+  if (this->state_.HYST_LEVEL == static_cast<uint8_t>(value))
+    return;
   this->state_.HYST_LEVEL = static_cast<uint8_t>(value);
   if (this->initialized_) {
     this->write_(Register::AGCCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_packet_mode(bool value) {
-  this->state_.PKT_FORMAT =
-      static_cast<uint8_t>(value ? PacketFormat::PACKET_FORMAT_FIFO : PacketFormat::PACKET_FORMAT_ASYNC_SERIAL);
+  uint8_t fmt = value ? static_cast<uint8_t>(PacketFormat::PACKET_FORMAT_FIFO)
+                      : static_cast<uint8_t>(PacketFormat::PACKET_FORMAT_ASYNC_SERIAL);
+  if (this->state_.PKT_FORMAT == fmt)
+    return;
+  this->state_.PKT_FORMAT = fmt;
   if (value) {
     // Configure GDO0 for FIFO status (asserts on RX FIFO threshold or end of packet)
     this->state_.GDO0_CFG = 0x01;
@@ -669,33 +774,83 @@ void CC1101Component::set_packet_mode(bool value) {
     this->write_(Register::IOCFG0);
     this->write_(Register::FIFOTHR);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_packet_length(uint8_t value) {
-  if (value == 0) {
-    this->state_.LENGTH_CONFIG = static_cast<uint8_t>(LengthConfig::LENGTH_CONFIG_VARIABLE);
-  } else {
-    this->state_.LENGTH_CONFIG = static_cast<uint8_t>(LengthConfig::LENGTH_CONFIG_FIXED);
+  uint8_t len_cfg = (value == 0) ? static_cast<uint8_t>(LengthConfig::LENGTH_CONFIG_VARIABLE)
+                                 : static_cast<uint8_t>(LengthConfig::LENGTH_CONFIG_FIXED);
+  if (this->state_.LENGTH_CONFIG == len_cfg && (value == 0 || this->state_.PKTLEN == value))
+    return;
+  this->state_.LENGTH_CONFIG = len_cfg;
+  if (value != 0) {
     this->state_.PKTLEN = value;
   }
   if (this->initialized_) {
     this->write_(Register::PKTCTRL0);
     this->write_(Register::PKTLEN);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_crc_enable(bool value) {
-  this->state_.CRC_EN = value ? 1 : 0;
+  uint8_t val = value ? 1 : 0;
+  if (this->state_.CRC_EN == val)
+    return;
+  this->state_.CRC_EN = val;
   if (this->initialized_) {
     this->write_(Register::PKTCTRL0);
   }
+  this->notify_config_listeners_();
 }
 
 void CC1101Component::set_whitening(bool value) {
-  this->state_.WHITE_DATA = value ? 1 : 0;
+  uint8_t val = value ? 1 : 0;
+  if (this->state_.WHITE_DATA == val)
+    return;
+  this->state_.WHITE_DATA = val;
   if (this->initialized_) {
     this->write_(Register::PKTCTRL0);
   }
+  this->notify_config_listeners_();
+}
+
+float CC1101Component::get_frequency() {
+  return static_cast<int32_t>(this->state_.FREQ2 << 16 | this->state_.FREQ1 << 8 | this->state_.FREQ0) *
+         XTAL_FREQUENCY / (1 << 16);
+}
+
+float CC1101Component::get_if_frequency() { return this->state_.FREQ_IF * XTAL_FREQUENCY / (1 << 10); }
+
+float CC1101Component::get_filter_bandwidth() {
+  return XTAL_FREQUENCY / (8.0f * (4 + this->state_.CHANBW_M) * (1 << this->state_.CHANBW_E));
+}
+
+float CC1101Component::get_channel_spacing() {
+  uint32_t m = this->state_.CHANSPC_M;
+  uint32_t e = this->state_.CHANSPC_E;
+  return ((256 + m) * (1 << e) * XTAL_FREQUENCY) / (1 << 18);
+}
+
+float CC1101Component::get_fsk_deviation() {
+  uint32_t m = this->state_.DEVIATION_M;
+  uint32_t e = this->state_.DEVIATION_E;
+  return (XTAL_FREQUENCY / (1 << 17)) * (8 + m) * (1 << e);
+}
+
+float CC1101Component::get_symbol_rate() {
+  uint32_t m = this->state_.DRATE_M;
+  uint32_t e = this->state_.DRATE_E;
+  return (((256.0f + m) * (1 << e)) / (1 << 28)) * XTAL_FREQUENCY;
+}
+
+int8_t CC1101Component::get_carrier_sense_abs_thr() {
+  int8_t val = this->state_.CARRIER_SENSE_ABS_THR;
+  // Sign extend from 4 bits
+  if (val & 0x08) {
+    val |= 0xF0;
+  }
+  return val;
 }
 
 }  // namespace esphome::cc1101
